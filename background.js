@@ -1,14 +1,6 @@
-importScripts('lib/jszip.min.js');
-
-let collectedFiles = [];
-
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "startSearchLoop") {
-    collectedFiles = [];
-    chrome.storage.local.set({
-      isScanning: true,
-      processedCount: 0
-    }, () => {
+    chrome.storage.local.set({ isScanning: true }, () => {
       sendResponse({ status: "initialized" });
     });
     return true;
@@ -19,47 +11,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return;
   }
 
-  if (request.action === "collectAttachment" && request.file) {
-    collectedFiles.push(request.file);
-    return;
-  }
-
-  if (request.action === "finalizeZipBundle") {
-    chrome.storage.local.set({ isScanning: false });
-    chrome.runtime.sendMessage({ action: "updateStatus", text: `Compiling ZIP packaging for ${collectedFiles.length} items...` }).catch(() => {});
-    buildAndDownloadZip(collectedFiles);
+  // NEW: Catch the compiled ZIP from the content script and force the browser to download it
+  if (request.action === "triggerNativeDownload") {
+    chrome.downloads.download({
+      url: request.url,
+      filename: `gmail-attachments-${Date.now()}.zip`,
+      saveAs: true // Set to false if you want it to bypass the "Save As" popup
+    }, (downloadId) => {
+      if (chrome.runtime.lastError) {
+        console.error("Download failed:", chrome.runtime.lastError);
+      } else {
+        console.log("Successfully downloaded with ID:", downloadId);
+      }
+      sendResponse({ status: "downloading" });
+    });
+    return true; // Keep message channel open for async response
   }
 });
-
-function sanitizeFileName(name) {
-  return name.replace(/[\\/:*?"<>|]/g, '_').substring(0, 180);
-}
-
-async function buildAndDownloadZip(fileList) {
-  if (!fileList || fileList.length === 0) {
-    chrome.runtime.sendMessage({ action: "updateStatus", text: "Finished. No files found." }).catch(() => {});
-    return;
-  }
-
-  const zip = new JSZip();
-
-  for (const file of fileList) {
-    const base64Content = file.dataUrl ? file.dataUrl.split(',')[1] : '';
-    const safeName = sanitizeFileName(file.name || `attachment_${Date.now()}`);
-    if (base64Content) {
-      zip.file(safeName, base64Content, { base64: true });
-    }
-  }
-
-  // FIX: Use base64 Data URL instead of createObjectURL (which isn't supported in MV3 Service Workers)
-  const base64Zip = await zip.generateAsync({ type: "base64" });
-  const dataUrl = "data:application/zip;base64," + base64Zip;
-
-  chrome.downloads.download({
-    url: dataUrl,
-    filename: "gmail-attachments.zip",
-    saveAs: true
-  }, () => {
-    chrome.runtime.sendMessage({ action: "updateStatus", text: "Download triggered successfully!" }).catch(() => {});
-  });
-}

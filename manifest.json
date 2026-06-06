@@ -12,7 +12,7 @@
     "https://mail.google.com/*"
   ],
   "action": {
-    "default_popup": "popup/popup.html"
+    "default_popup": "popup.html"
   },
   "background": {
     "service_worker": "background.js"
@@ -20,7 +20,7 @@
   "content_scripts": [
     {
       "matches": ["https://mail.google.com/*"],
-      "js": ["content.js"],
+      "js": ["lib/jszip.min.js", "content.js"],
       "run_at": "document_idle"
     }
   ]
