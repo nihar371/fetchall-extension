@@ -15,7 +15,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "postLog") {
-    chrome.runtime.sendMessage({ action: "updateStatus", text: request.text });
+    chrome.runtime.sendMessage({ action: "updateStatus", text: request.text }).catch(() => {});
     return;
   }
 
@@ -26,7 +26,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === "finalizeZipBundle") {
     chrome.storage.local.set({ isScanning: false });
-    chrome.runtime.sendMessage({ action: "updateStatus", text: `Compiling ZIP packaging for ${collectedFiles.length} items...` });
+    chrome.runtime.sendMessage({ action: "updateStatus", text: `Compiling ZIP packaging for ${collectedFiles.length} items...` }).catch(() => {});
     buildAndDownloadZip(collectedFiles);
   }
 });
@@ -37,7 +37,7 @@ function sanitizeFileName(name) {
 
 async function buildAndDownloadZip(fileList) {
   if (!fileList || fileList.length === 0) {
-    chrome.runtime.sendMessage({ action: "updateStatus", text: "Finished. No files found." });
+    chrome.runtime.sendMessage({ action: "updateStatus", text: "Finished. No files found." }).catch(() => {});
     return;
   }
 
@@ -51,15 +51,15 @@ async function buildAndDownloadZip(fileList) {
     }
   }
 
-  const blob = await zip.generateAsync({ type: "blob" });
-  const blobUrl = URL.createObjectURL(blob);
+  // FIX: Use base64 Data URL instead of createObjectURL (which isn't supported in MV3 Service Workers)
+  const base64Zip = await zip.generateAsync({ type: "base64" });
+  const dataUrl = "data:application/zip;base64," + base64Zip;
 
   chrome.downloads.download({
-    url: blobUrl,
+    url: dataUrl,
     filename: "gmail-attachments.zip",
     saveAs: true
   }, () => {
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-    chrome.runtime.sendMessage({ action: "updateStatus", text: "Download triggered successfully!" });
+    chrome.runtime.sendMessage({ action: "updateStatus", text: "Download triggered successfully!" }).catch(() => {});
   });
 }

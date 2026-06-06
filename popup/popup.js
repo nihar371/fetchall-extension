@@ -5,7 +5,7 @@ document.getElementById('collectBtn').addEventListener('click', async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   
   if (!tab || !tab.url.includes("mail.google.com")) {
-    statusDiv.textContent = "Error: Please open Gmail search results page.";
+    statusDiv.textContent = "Please open Gmail search results page.";
     return;
   }
 
@@ -20,25 +20,16 @@ document.getElementById('collectBtn').addEventListener('click', async () => {
       return;
     }
 
-    // Retry sending triggerScanStart if content script isn't ready yet
-    let retries = 0;
-    const maxRetries = 5;
-    const sendTrigger = () => {
-      chrome.tabs.sendMessage(tab.id, { action: "triggerScanStart" }, (tabResponse) => {
-        if (chrome.runtime.lastError) {
-          if (retries < maxRetries) {
-            retries++;
-            statusDiv.textContent = `Waiting for Gmail to load... (attempt ${retries}/${maxRetries})`;
-            setTimeout(sendTrigger, 1000);
-          } else {
-            statusDiv.textContent = "Error: Could not connect to Gmail tab. Reload the page and try again.";
-          }
-          return;
-        }
-        statusDiv.textContent = "Scan running! Keep this tab visible.";
-      });
-    };
-    sendTrigger();
+    // Send the trigger to the content script directly, failing immediately on error
+    chrome.tabs.sendMessage(tab.id, { action: "triggerScanStart" }, (tabResponse) => {
+      if (chrome.runtime.lastError) {
+        // If the content script isn't attached (e.g., page wasn't refreshed after extension update), fail fast.
+        statusDiv.textContent = "Error: Could not connect to Gmail tab. Please refresh the Gmail page and try again.";
+        console.error("Connection failed:", chrome.runtime.lastError.message);
+        return;
+      }
+      statusDiv.textContent = "Scan running! Keep this tab visible.";
+    });
   });
 });
 
