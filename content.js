@@ -1,8 +1,61 @@
 const delay = ms => new Promise(res => setTimeout(res, ms));
 let isProcessing = false;
 let collectedUrls = new Set();
-let collectedAttachments = []; // Stores the raw file blobs natively
+let collectedAttachments = []; 
+let fileNameTracker = new Map(); // NEW: Tracks duplicate filenames
 let emailsProcessed = 0;
+
+// NEW: Smart extractor with strict extension checking
+function getCleanFilename(link) {
+  let attrName = link.getAttribute('download');
+  if (attrName && attrName !== 'true' && attrName !== 'attachment') {
+    return attrName;
+  }
+
+  const aria = link.getAttribute('aria-label') || link.getAttribute('data-tooltip') || '';
+  let cleanAria = aria.replace(/^(Download|Preview|Open) (attachment )?/i, '').trim();
+  if (cleanAria && cleanAria.includes('.')) {
+    return cleanAria;
+  }
+
+  const text = link.textContent || '';
+  // STRICT REGEX: Only accepts real file extensions, stopping the "pdfPr" bug
+  const match = text.match(/(.*?\.(?:pdf|png|jpe?g|gif|docx?|xlsx?|pptx?|csv|zip|rar|txt|mp\d|svg|avi|mov))/i);
+  
+  if (match) {
+    let extracted = match[1].trim();
+    // Strip out the leading "Preview attachment" text if it got glued to the front
+    extracted = extracted.replace(/^(Preview|Download) attachment /i, '').trim();
+    return extracted;
+  }
+
+  return `attachment_${Date.now()}.file`;
+}
+
+// NEW: Duplicate Filename Handler
+function getUniqueFilename(baseName) {
+  if (!fileNameTracker.has(baseName)) {
+    fileNameTracker.set(baseName, 1);
+    return baseName;
+  }
+
+  let count = fileNameTracker.get(baseName);
+  let newName;
+  let lastDotIndex = baseName.lastIndexOf('.');
+
+  // If it has an extension, insert the number before it: "file (1).pdf"
+  if (lastDotIndex !== -1) {
+    let namePart = baseName.substring(0, lastDotIndex);
+    let extPart = baseName.substring(lastDotIndex);
+    newName = `${namePart} (${count})${extPart}`;
+  } else {
+    // If no extension, just append it: "file (1)"
+    newName = `${baseName} (${count})`;
+  }
+
+  fileNameTracker.set(baseName, count + 1);
+  return newName;
+}
 
 function isVisible(el) {
   if (!el) return false;
@@ -16,43 +69,16 @@ function isListView() {
 }
 
 function isEmailView() {
-  // We explicitly check for the "Back" button. This guarantees we don't confuse the list view for an email.
   const backBtns = document.querySelectorAll('div[act="19"], div[aria-label^="Back to "], .ar6.T-I-J3.J-J5-Ji');
   return Array.from(backBtns).some(isVisible);
 }
 
 function getNextButton() {
-  if (!isEmailView()) return null; // Prevents accidentally grabbing the list view pagination
+  if (!isEmailView()) return null; 
   const btns = document.querySelectorAll('div[aria-label="Older"], div[data-tooltip="Older"]');
   return Array.from(btns).find(isVisible) || null;
 }
 
-function getCleanFilename(link) {
-  // 1. Check if the 'download' attribute has a clean, real name
-  let attrName = link.getAttribute('download');
-  if (attrName && attrName !== 'true' && attrName !== 'attachment') {
-    return attrName;
-  }
-
-  // 2. Check aria-labels or tooltips (Gmail usually formats these as "Download my_file.pdf")
-  const aria = link.getAttribute('aria-label') || link.getAttribute('data-tooltip') || '';
-  let cleanAria = aria.replace(/^(Download|Preview) attachment /i, '').replace(/^Download /i, '').trim();
-  if (cleanAria && cleanAria.includes('.')) {
-    return cleanAria;
-  }
-
-  // 3. Fallback: Use Regex to extract just the first valid filename from the mashed text
-  const text = link.textContent || '';
-  const match = text.match(/([a-zA-Z0-9_ \-\(\)]+\.[a-zA-Z0-9]{2,5})/);
-  if (match) {
-    return match[1].trim();
-  }
-
-  // 4. Absolute failsafe
-  return `attachment_${Date.now()}`;
-}
-
-// Generate the ZIP directly in the browser tab
 async function compileAndDownloadZip() {
   if (collectedAttachments.length === 0) {
     chrome.runtime.sendMessage({ action: "postLog", text: "Finished. No files found to zip." }).catch(() => {});
@@ -68,15 +94,13 @@ async function compileAndDownloadZip() {
       zip.file(file.name, file.blob);
     }
 
-    // Generate as Base64 instead of a Blob to bypass Gmail's security policy
     const zipBase64 = await zip.generateAsync({ type: "base64" });
     const dataUrl = "data:application/zip;base64," + zipBase64;
 
-    // Send the massive string to the background script to handle the actual saving
     chrome.runtime.sendMessage({ 
       action: "triggerNativeDownload", 
       url: dataUrl 
-    }, (response) => {
+    }, () => {
       chrome.runtime.sendMessage({ action: "postLog", text: "Download triggered successfully!" }).catch(() => {});
     });
 
@@ -100,7 +124,6 @@ async function processGmailAutomation() {
       return;
     }
 
-    // STEP 1: Handle List View 
     if (isListView() && !isEmailView()) {
       chrome.runtime.sendMessage({ action: "postLog", text: "Starting from list. Opening first email..." }).catch(() => {});
       const firstRow = Array.from(document.querySelectorAll('tr.zA')).find(isVisible);
@@ -115,15 +138,11 @@ async function processGmailAutomation() {
       }
     }
 
-    // STEP 2: The Main Loop
     if (isEmailView()) {
       emailsProcessed++;
       chrome.runtime.sendMessage({ action: "postLog", text: `Scanning email #${emailsProcessed}...` }).catch(() => {});
-      
-      // Bumped this delay slightly in case attachments are lazy-loading
       await delay(2500); 
 
-      // NEW: A highly aggressive list of known Gmail attachment URL patterns
       const attachmentSelectors = [
         'a[href*="view=att"]',
         'a[href*="disp=safe"]',
@@ -133,30 +152,29 @@ async function processGmailAutomation() {
 
       const links = Array.from(document.querySelectorAll(attachmentSelectors));
       
-      // Add a quick visual log to the console so we can see if it found anything
-      console.log(`[FetchAll] Found ${links.length} potential attachment links in email #${emailsProcessed}`);
-
       for (const link of links) {
         const url = link.href;
-        const name = getCleanFilename(link);
         
         if (url && !collectedUrls.has(url)) {
           try {
-            chrome.runtime.sendMessage({ action: "postLog", text: `Fetching: ${name.substring(0, 20)}...` }).catch(() => {});
+            // Process the raw name and pass it through our deduplicator
+            const rawName = getCleanFilename(link);
+            const finalName = getUniqueFilename(rawName);
+
+            chrome.runtime.sendMessage({ action: "postLog", text: `Fetching: ${finalName.substring(0, 20)}...` }).catch(() => {});
             
             const response = await fetch(url); 
             const blob = await response.blob();
             
-            // Store the raw blob immediately. No Base64 overhead needed!
             collectedUrls.add(url);
-            collectedAttachments.push({ name, blob }); 
+            // Save it to our array with the deduplicated name
+            collectedAttachments.push({ name: finalName, blob }); 
           } catch (e) {
             console.error('Failed to extract file attachment stream', e);
           }
         }
       }
 
-      // STEP 3: Navigate to NEXT email
       const nextBtn = getNextButton();
       if (nextBtn) {
         const isDisabled = nextBtn.getAttribute('aria-disabled') === 'true';
@@ -198,9 +216,9 @@ async function processGmailAutomation() {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "triggerScanStart") {
-    // Reset our tab-level state
     collectedUrls.clear();
     collectedAttachments = []; 
+    fileNameTracker.clear(); // Reset the duplicate tracker on a new scan
     emailsProcessed = 0; 
     
     chrome.storage.local.set({ isScanning: true }, () => {
