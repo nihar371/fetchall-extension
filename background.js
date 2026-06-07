@@ -11,12 +11,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return;
   }
 
-  // NEW: Catch the compiled ZIP from the content script and force the browser to download it
+  // Catch the compiled ZIP from the content script and force the browser to download it
   if (request.action === "triggerNativeDownload") {
     chrome.downloads.download({
       url: request.url,
       filename: `gmail-attachments-${Date.now()}.zip`,
-      saveAs: true // Set to false if you want it to bypass the "Save As" popup
+      saveAs: true
     }, (downloadId) => {
       if (chrome.runtime.lastError) {
         console.error("Download failed:", chrome.runtime.lastError);
@@ -25,6 +25,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
       sendResponse({ status: "downloading" });
     });
-    return true; // Keep message channel open for async response
+    return true;
   }
 });
