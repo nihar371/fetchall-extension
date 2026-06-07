@@ -2,10 +2,10 @@ const delay = ms => new Promise(res => setTimeout(res, ms));
 let isProcessing = false;
 let collectedUrls = new Set();
 let collectedAttachments = []; 
-let fileNameTracker = new Map(); // NEW: Tracks duplicate filenames
+let fileNameTracker = new Map();
 let emailsProcessed = 0;
 
-// NEW: Smart extractor with strict extension checking
+// Extractor with strict extension checking
 function getCleanFilename(link) {
   let attrName = link.getAttribute('download');
   if (attrName && attrName !== 'true' && attrName !== 'attachment') {
@@ -32,7 +32,7 @@ function getCleanFilename(link) {
   return `attachment_${Date.now()}.file`;
 }
 
-// NEW: Duplicate Filename Handler
+// Duplicate Filename Handler
 function getUniqueFilename(baseName) {
   if (!fileNameTracker.has(baseName)) {
     fileNameTracker.set(baseName, 1);
@@ -143,6 +143,14 @@ async function processGmailAutomation() {
       chrome.runtime.sendMessage({ action: "postLog", text: `Scanning email #${emailsProcessed}...` }).catch(() => {});
       await delay(2500); 
 
+      // "Expand all" if the thread has collapsed messages
+      const expandBtn = document.querySelector('[aria-label="Expand all"], img[alt="Expand all"]');
+      if (expandBtn && isVisible(expandBtn)) {
+        chrome.runtime.sendMessage({ action: "postLog", text: "Expanding collapsed thread..." }).catch(() => {});
+        expandBtn.click();
+        await delay(1000);
+      }
+
       const attachmentSelectors = [
         'a[href*="view=att"]',
         'a[href*="disp=safe"]',
@@ -157,7 +165,7 @@ async function processGmailAutomation() {
         
         if (url && !collectedUrls.has(url)) {
           try {
-            // Process the raw name and pass it through our deduplicator
+            // Process the raw name and pass it through deduplicator
             const rawName = getCleanFilename(link);
             const finalName = getUniqueFilename(rawName);
 
@@ -167,7 +175,6 @@ async function processGmailAutomation() {
             const blob = await response.blob();
             
             collectedUrls.add(url);
-            // Save it to our array with the deduplicated name
             collectedAttachments.push({ name: finalName, blob }); 
           } catch (e) {
             console.error('Failed to extract file attachment stream', e);
@@ -218,7 +225,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "triggerScanStart") {
     collectedUrls.clear();
     collectedAttachments = []; 
-    fileNameTracker.clear(); // Reset the duplicate tracker on a new scan
+    fileNameTracker.clear();
     emailsProcessed = 0; 
     
     chrome.storage.local.set({ isScanning: true }, () => {

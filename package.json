@@ -1,0 +1,19 @@
+{
+  "name": "fetchall-extension",
+  "version": "1.0.0",
+  "description": "Download all attachments from a Gmail thread or search result into a single zip file.",
+  "main": "background.js",
+  "scripts": {
+    "prezip": "node -e \"require('fs').mkdirSync('dist', { recursive: true })\"",
+    "zip": "bestzip dist/extension.zip manifest.json background.js scripts/content.js popup/* lib/* icons/*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nihar371/fetchall-extension.git"
+  },
+  "author": "Nihar Patel",
+  "license": "MIT",
+  "devDependencies": {
+    "bestzip": "^2.2.0"
+  }
+}
