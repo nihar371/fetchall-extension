@@ -1,58 +1,122 @@
 const delay = ms => new Promise(res => setTimeout(res, ms));
 let isProcessing = false;
 let collectedUrls = new Set();
-let collectedAttachments = []; 
 let fileNameTracker = new Map();
-let emailsProcessed = 0;
 
-// Extractor with strict extension checking
+// Scan state
+let scanStats = {
+  emailsScanned: 0,
+  filesFound: 0,
+  sizeBytes: 0
+};
+let currentSettings = {};
+
+// --- IndexedDB Setup ---
+const DB_NAME = "FetchAll_DB";
+const STORE_NAME = "attachments";
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { autoIncrement: true });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveAttachmentToDB(fileData) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    store.put(fileData);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function getAllAttachmentsFromDB() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const store = tx.objectStore(STORE_NAME);
+    const request = store.getAll();
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function clearAttachmentsDB() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    store.clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+// ---------------------------------------------
+
+function reportProgress(textMsg, isFinished = false) {
+  chrome.runtime.sendMessage({
+    action: "progressUpdate",
+    text: textMsg,
+    stats: {
+      emailsScanned: scanStats.emailsScanned,
+      filesFound: scanStats.filesFound,
+      sizeMb: (scanStats.sizeBytes / (1024 * 1024)).toFixed(2)
+    },
+    finished: isFinished
+  }).catch(() => {});
+}
+
+async function waitForElement(selector, timeout = 10000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const elements = Array.from(document.querySelectorAll(selector));
+    const visibleEl = elements.find(isVisible);
+    if (visibleEl) return visibleEl;
+    await delay(250);
+  }
+  return null;
+}
+
 function getCleanFilename(link) {
   let attrName = link.getAttribute('download');
-  if (attrName && attrName !== 'true' && attrName !== 'attachment') {
-    return attrName;
-  }
-
+  if (attrName && attrName !== 'true' && attrName !== 'attachment') return attrName;
   const aria = link.getAttribute('aria-label') || link.getAttribute('data-tooltip') || '';
   let cleanAria = aria.replace(/^(Download|Preview|Open) (attachment )?/i, '').trim();
-  if (cleanAria && cleanAria.includes('.')) {
-    return cleanAria;
-  }
+  if (cleanAria && cleanAria.includes('.')) return cleanAria;
 
   const text = link.textContent || '';
-  // STRICT REGEX: Only accepts real file extensions, stopping the "pdfPr" bug
   const match = text.match(/(.*?\.(?:pdf|png|jpe?g|gif|docx?|xlsx?|pptx?|csv|zip|rar|txt|mp\d|svg|avi|mov))/i);
-  
   if (match) {
     let extracted = match[1].trim();
-    // Strip out the leading "Preview attachment" text if it got glued to the front
     extracted = extracted.replace(/^(Preview|Download) attachment /i, '').trim();
     return extracted;
   }
-
   return `attachment_${Date.now()}.file`;
 }
 
-// Duplicate Filename Handler
 function getUniqueFilename(baseName) {
   if (!fileNameTracker.has(baseName)) {
     fileNameTracker.set(baseName, 1);
     return baseName;
   }
-
   let count = fileNameTracker.get(baseName);
   let newName;
   let lastDotIndex = baseName.lastIndexOf('.');
-
-  // If it has an extension, insert the number before it: "file (1).pdf"
   if (lastDotIndex !== -1) {
-    let namePart = baseName.substring(0, lastDotIndex);
-    let extPart = baseName.substring(lastDotIndex);
-    newName = `${namePart} (${count})${extPart}`;
+    newName = `${baseName.substring(0, lastDotIndex)} (${count})${baseName.substring(lastDotIndex)}`;
   } else {
-    // If no extension, just append it: "file (1)"
     newName = `${baseName} (${count})`;
   }
-
   fileNameTracker.set(baseName, count + 1);
   return newName;
 }
@@ -64,8 +128,7 @@ function isVisible(el) {
 }
 
 function isListView() {
-  const rows = document.querySelectorAll('tr.zA');
-  return Array.from(rows).some(isVisible);
+  return Array.from(document.querySelectorAll('tr.zA')).some(isVisible);
 }
 
 function isEmailView() {
@@ -79,14 +142,32 @@ function getNextButton() {
   return Array.from(btns).find(isVisible) || null;
 }
 
+function isAllowedExtension(filename) {
+  // If no filters selected, extract nothing
+  if (!currentSettings.pdf && !currentSettings.img && !currentSettings.doc) return false;
+  
+  const extMatch = filename.match(/\.([a-z0-9]+)$/i);
+  if (!extMatch) return true; // Keep extensionless files if they somehow pass
+  
+  const ext = extMatch[1].toLowerCase();
+  
+  if (currentSettings.pdf && ext === 'pdf') return true;
+  if (currentSettings.img && ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) return true;
+  if (currentSettings.doc && ['doc', 'docx', 'xls', 'xlsx', 'csv', 'txt', 'ppt', 'pptx'].includes(ext)) return true;
+  
+  return false;
+}
+
 async function compileAndDownloadZip() {
+  const collectedAttachments = await getAllAttachmentsFromDB();
+
   if (collectedAttachments.length === 0) {
-    chrome.runtime.sendMessage({ action: "postLog", text: "Finished. No files found to zip." }).catch(() => {});
+    reportProgress("Finished. No matching files found to zip.", true);
     chrome.storage.local.set({ isScanning: false });
     return;
   }
 
-  chrome.runtime.sendMessage({ action: "postLog", text: `Compiling ZIP for ${collectedAttachments.length} items. Please wait...` }).catch(() => {});
+  reportProgress(`Compiling ZIP for ${collectedAttachments.length} items. Please wait...`);
 
   try {
     const zip = new JSZip();
@@ -94,20 +175,23 @@ async function compileAndDownloadZip() {
       zip.file(file.name, file.blob);
     }
 
-    const zipBase64 = await zip.generateAsync({ type: "base64" });
-    const dataUrl = "data:application/zip;base64," + zipBase64;
+    const zipBlob = await zip.generateAsync({ type: "blob" });
+    const objectUrl = URL.createObjectURL(zipBlob);
 
-    chrome.runtime.sendMessage({ 
-      action: "triggerNativeDownload", 
-      url: dataUrl 
-    }, () => {
-      chrome.runtime.sendMessage({ action: "postLog", text: "Download triggered successfully!" }).catch(() => {});
-    });
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = `gmail-attachments-${Date.now()}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
 
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 10000);
+    reportProgress("Download triggered successfully!", true);
   } catch (error) {
     console.error("ZIP Generation failed:", error);
-    chrome.runtime.sendMessage({ action: "postLog", text: "Error generating ZIP. Check console." }).catch(() => {});
+    reportProgress("Error generating ZIP. Check console.", true);
   } finally {
+    await clearAttachmentsDB();
     chrome.storage.local.set({ isScanning: false });
     isProcessing = false;
   }
@@ -118,20 +202,24 @@ async function processGmailAutomation() {
   isProcessing = true;
 
   try {
-    const state = await chrome.storage.local.get(["isScanning"]);
+    const state = await chrome.storage.local.get(["isScanning", "settings"]);
+    currentSettings = state.settings || { pdf: true, img: true, doc: true, skipInline: true };
+
+    // Handle Graceful Stop
     if (!state.isScanning) {
-      isProcessing = false;
+      reportProgress("Scan stopped by user. Generating ZIP...");
+      await compileAndDownloadZip();
       return;
     }
 
     if (isListView() && !isEmailView()) {
-      chrome.runtime.sendMessage({ action: "postLog", text: "Starting from list. Opening first email..." }).catch(() => {});
-      const firstRow = Array.from(document.querySelectorAll('tr.zA')).find(isVisible);
+      reportProgress("Starting from list. Opening first email...");
+      const firstRow = await waitForElement('tr.zA');
       
       if (firstRow) {
         const clickable = firstRow.querySelector('div[role="link"], a[href]') || firstRow;
         clickable.click();
-        await delay(2500); 
+        await waitForElement('.a3s'); 
         isProcessing = false;
         processGmailAutomation();
         return;
@@ -139,16 +227,14 @@ async function processGmailAutomation() {
     }
 
     if (isEmailView()) {
-      emailsProcessed++;
-      chrome.runtime.sendMessage({ action: "postLog", text: `Scanning email #${emailsProcessed}...` }).catch(() => {});
-      await delay(2500); 
+      scanStats.emailsScanned++;
+      reportProgress(`Scanning email #${scanStats.emailsScanned}...`);
+      await delay(500); 
 
-      // "Expand all" if the thread has collapsed messages
       const expandBtn = document.querySelector('[aria-label="Expand all"], img[alt="Expand all"]');
       if (expandBtn && isVisible(expandBtn)) {
-        chrome.runtime.sendMessage({ action: "postLog", text: "Expanding collapsed thread..." }).catch(() => {});
         expandBtn.click();
-        await delay(1000);
+        await delay(1000); 
       }
 
       const attachmentSelectors = [
@@ -165,34 +251,67 @@ async function processGmailAutomation() {
         
         if (url && !collectedUrls.has(url)) {
           try {
-            // Process the raw name and pass it through deduplicator
-            const rawName = getCleanFilename(link);
-            const finalName = getUniqueFilename(rawName);
+            let rawName = getCleanFilename(link);
+            
+            // Apply Extension Filter (Pre-fetch check)
+            if (!isAllowedExtension(rawName)) {
+                collectedUrls.add(url); // Add to seen list to avoid repeating
+                continue;
+            }
 
-            chrome.runtime.sendMessage({ action: "postLog", text: `Fetching: ${finalName.substring(0, 20)}...` }).catch(() => {});
+            reportProgress(`Fetching file...`);
             
             const response = await fetch(url); 
+            if (!response.ok) continue;
+
+            const disposition = response.headers.get('Content-Disposition');
+            if (disposition && disposition.includes('filename=')) {
+              const match = disposition.match(/filename="?([^"]+)"?/);
+              if (match && match[1]) rawName = match[1];
+            }
+
+            // Secondary Extension Check (Post-fetch, in case headers changed the name)
+            if (!isAllowedExtension(rawName)) {
+                collectedUrls.add(url);
+                continue;
+            }
+
             const blob = await response.blob();
-            
+
+            // Handle "Skip Inline Images" (< 10KB logic)
+            if (currentSettings.skipInline && blob.size < 10240) {
+                // If it's an image under 10KB, skip it
+                const isImg = rawName.match(/\.(png|jpg|jpeg|gif)$/i) || blob.type.startsWith('image/');
+                if (isImg) {
+                    collectedUrls.add(url);
+                    continue; 
+                }
+            }
+
+            const finalName = getUniqueFilename(rawName);
             collectedUrls.add(url);
-            collectedAttachments.push({ name: finalName, blob }); 
+            
+            scanStats.filesFound++;
+            scanStats.sizeBytes += blob.size;
+
+            await saveAttachmentToDB({ name: finalName, blob }); 
+            reportProgress(`Saved: ${finalName.substring(0, 20)}...`);
+
           } catch (e) {
-            console.error('Failed to extract file attachment stream', e);
+            console.error('Failed to extract file', e);
           }
         }
       }
 
       const nextBtn = getNextButton();
       if (nextBtn) {
-        const isDisabled = nextBtn.getAttribute('aria-disabled') === 'true';
-        
-        if (isDisabled) {
-          chrome.runtime.sendMessage({ action: "postLog", text: "End of search list reached!" }).catch(() => {});
+        if (nextBtn.getAttribute('aria-disabled') === 'true') {
+          reportProgress("End of search list reached!");
           await compileAndDownloadZip();
           return;
         }
 
-        chrome.runtime.sendMessage({ action: "postLog", text: "Moving to next email..." }).catch(() => {});
+        reportProgress("Moving to next email...");
         nextBtn.click();
         
         await delay(1500); 
@@ -200,7 +319,7 @@ async function processGmailAutomation() {
         processGmailAutomation();
         return;
       } else {
-         chrome.runtime.sendMessage({ action: "postLog", text: "No pagination found. Ending scan." }).catch(() => {});
+         reportProgress("No pagination found. Ending scan.");
          await compileAndDownloadZip();
          return;
       }
@@ -223,13 +342,15 @@ async function processGmailAutomation() {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "triggerScanStart") {
+    
+    // Reset Data
     collectedUrls.clear();
-    collectedAttachments = []; 
     fileNameTracker.clear();
-    emailsProcessed = 0; 
+    scanStats = { emailsScanned: 0, filesFound: 0, sizeBytes: 0 };
+    clearAttachmentsDB();
     
     chrome.storage.local.set({ isScanning: true }, () => {
-      chrome.runtime.sendMessage({ action: "postLog", text: "Gmail automation starting..." }).catch(() => {});
+      reportProgress("Gmail automation starting...");
       processGmailAutomation();
     });
     sendResponse({ status: "triggered" });
