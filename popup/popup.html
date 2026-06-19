@@ -5,9 +5,47 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <h3>FetchAll Attachment Downloader</h3>
-  <button id="collectBtn">Start Automated Scan</button>
-  <div id="status">Open your search page and click Start.</div>
+  <div class="container">
+    <h3>FetchAll</h3>
+    
+    <div id="settings-panel" class="panel">
+      <div class="setting-group">
+        <label class="setting-title">File Types to Extract:</label>
+        <label><input type="checkbox" id="filter-pdf" checked> PDFs (.pdf)</label>
+        <label><input type="checkbox" id="filter-img" checked> Images (.jpg, .png...)</label>
+        <label><input type="checkbox" id="filter-doc" checked> Documents (.docx, .csv...)</label>
+      </div>
+      
+      <div class="setting-group">
+        <label class="setting-title">Smart Filters:</label>
+        <label><input type="checkbox" id="skip-inline" checked> Skip Inline Images (&lt; 10KB)</label>
+      </div>
+    </div>
+
+    <div id="progress-panel" class="panel hidden">
+      <div class="stats-grid">
+        <div class="stat-box">
+          <span class="stat-value" id="stat-emails">0</span>
+          <span class="stat-label">Emails</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-value" id="stat-files">0</span>
+          <span class="stat-label">Files</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-value" id="stat-size">0.00</span>
+          <span class="stat-label">MB</span>
+        </div>
+      </div>
+      <progress id="scan-progress" value="0" max="100"></progress>
+      <div id="status">Ready to scan...</div>
+    </div>
+
+    <div class="action-buttons">
+      <button id="collectBtn" class="btn-primary">Start Scan</button>
+      <button id="stopBtn" class="btn-danger hidden">Stop & Zip Data</button>
+    </div>
+  </div>
   <script src="popup.js"></script>
 </body>
 </html>

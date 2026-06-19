@@ -6,25 +6,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  if (request.action === "postLog") {
-    chrome.runtime.sendMessage({ action: "updateStatus", text: request.text }).catch(() => {});
+  // Forward progress data and logs to popup UI
+  if (request.action === "progressUpdate" || request.action === "postLog") {
+    chrome.runtime.sendMessage(request).catch(() => {});
     return;
-  }
-
-  // Catch the compiled ZIP from the content script and force the browser to download it
-  if (request.action === "triggerNativeDownload") {
-    chrome.downloads.download({
-      url: request.url,
-      filename: `gmail-attachments-${Date.now()}.zip`,
-      saveAs: true
-    }, (downloadId) => {
-      if (chrome.runtime.lastError) {
-        console.error("Download failed:", chrome.runtime.lastError);
-      } else {
-        console.log("Successfully downloaded with ID:", downloadId);
-      }
-      sendResponse({ status: "downloading" });
-    });
-    return true;
   }
 });
