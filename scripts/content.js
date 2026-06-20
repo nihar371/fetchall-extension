@@ -91,11 +91,15 @@ function getCleanFilename(link) {
   let attrName = link.getAttribute('download');
   if (attrName && attrName !== 'true' && attrName !== 'attachment') return attrName;
   
-  const aria = link.getAttribute('aria-label') || link.getAttribute('data-tooltip') || '';
+  let aria = link.getAttribute('aria-label') || link.getAttribute('data-tooltip') || '';
+  aria = aria.replace(/[\u200B-\u200D\uFEFF\u200E\u200F]/g, '');
+  
   let cleanAria = aria.replace(/^(Download|Preview|Open)?\s*(attachment)?\s*:?\s*/i, '').trim();
   if (cleanAria && cleanAria.includes('.')) return cleanAria;
 
-  const text = link.textContent || '';
+  let text = link.textContent || '';
+  text = text.replace(/[\u200B-\u200D\uFEFF\u200E\u200F]/g, '');
+  
   const match = text.match(/(.*?\.[a-z0-9]{2,5})(?:\s|$)/i);
   if (match) {
     let extracted = match[1].trim();
@@ -144,23 +148,21 @@ function getNextButton() {
   return Array.from(btns).find(isVisible) || null;
 }
 
-// --- NEW: Robust Extension Checker ---
 function isAllowedExtension(filename) {
   const allowed = currentSettings.allowedExtensions || [];
   if (allowed.length === 0) return false;
   
-  // Clean off query parameters from URLs hiding in filenames
   let cleanName = filename.split('?')[0].split('#')[0].trim();
+  cleanName = cleanName.replace(/[\u200B-\u200D\uFEFF\u200E\u200F]/g, '');
   
-  const extMatch = cleanName.match(/\.([a-z0-9]{2,5})$/i);
+  const extMatch = cleanName.match(/\.([a-z0-9]+)$/i);
   if (!extMatch) return false; 
   
   const ext = extMatch[1].toLowerCase();
   return allowed.includes(ext);
 }
 
-// --- NEW: MIME-Type Fallback Guesser ---
-// If a file lacks an extension, this guesses it from the raw data type
+// --- MIME-Type Fallback Guesser ---
 function inferExtension(mimeType) {
   if (!mimeType) return null;
   const mime = mimeType.toLowerCase();
@@ -243,7 +245,6 @@ async function processGmailAutomation() {
     if (isListView() && !isEmailView()) {
       reportProgress("Starting from list. Opening first email...");
       const firstRow = await waitForElement('tr.zA');
-      
       if (firstRow) {
         const clickable = firstRow.querySelector('div[role="link"], a[href]') || firstRow;
         clickable.click();
@@ -274,65 +275,64 @@ async function processGmailAutomation() {
 
       const links = Array.from(document.querySelectorAll(attachmentSelectors));
       
-      for (const link of links) {
-        const url = link.href;
-        
-        if (url && !collectedUrls.has(url)) {
+      // NEW: Filter out already collected URLs first to avoid duplicate simultaneous requests
+      const uniqueLinks = links.filter(link => link.href && !collectedUrls.has(link.href));
+
+      // NEW: Create an array of Promises to run in PARALLEL
+      const processPromises = uniqueLinks.map(async (link) => {
+          const url = link.href;
+          collectedUrls.add(url); // Mark as claimed immediately
+
           try {
             let rawName = getCleanFilename(link);
             
             // STAGE 1 (PRE-CHECK)
             let cleanBaseName = rawName.split('?')[0].trim();
-            const hasExplicitExt = /\.[a-z0-9]{2,5}$/i.test(cleanBaseName);
-            if (hasExplicitExt && !isAllowedExtension(cleanBaseName)) {
-                collectedUrls.add(url);
-                continue;
-            }
-
-            reportProgress(`Fetching file...`);
+            const extMatch = cleanBaseName.match(/\.([a-z0-9]+)$/i);
+            const knownExtensions = ['pdf','png','jpg','jpeg','svg','gif','webp','heic','docx','doc','xlsx','xls','csv','txt','pptx','ppt','mp4','mov','avi','webm','eml','zip','json','rar'];
             
+            if (extMatch) {
+                const ext = extMatch[1].toLowerCase();
+                if (knownExtensions.includes(ext) && !isAllowedExtension(cleanBaseName)) {
+                    return; // Skip
+                }
+            }
+            
+            // STAGE 2 (HEADER FETCH)
             const response = await fetch(url); 
-            if (!response.ok) continue;
+            if (!response.ok) return;
 
             const disposition = response.headers.get('Content-Disposition');
+            const contentType = response.headers.get('Content-Type'); 
+
             if (disposition) {
-              let match = disposition.match(/filename="([^"]+)"/i);
-              if (!match) match = disposition.match(/filename=([^;]+)/i);
+              let match = disposition.match(/filename\*?=['"]?(?:UTF-\d['"]*)?([^;"'\n]+)['"]?/i);
               if (match && match[1]) {
-                rawName = decodeURIComponent(match[1].trim());
+                try { rawName = decodeURIComponent(match[1].trim()); } 
+                catch(e) { rawName = match[1].trim(); }
               }
             }
 
-            const blob = await response.blob();
-
-            // STAGE 2: MIME-Type Fallback
-            // If the filename STILL has no extension, ask the file data what type it is
             let cleanNameForCheck = rawName.split('?')[0].trim();
-            if (!/\.[a-z0-9]{2,5}$/i.test(cleanNameForCheck)) {
-                const guessedExt = inferExtension(blob.type);
-                if (guessedExt) {
-                    rawName += '.' + guessedExt;
-                }
+            if (!/\.[a-z0-9]+$/i.test(cleanNameForCheck)) {
+                const guessedExt = inferExtension(contentType); 
+                if (guessedExt) rawName += '.' + guessedExt;
             }
 
             // STAGE 3 (POST-CHECK):
-            if (!isAllowedExtension(rawName)) {
-                collectedUrls.add(url);
-                continue;
-            }
+            if (!isAllowedExtension(rawName)) return;
 
-            // Skip Inline Images Filter
+            // STAGE 4 (THE DOWNLOAD):
+            const blob = await response.blob();
+
             if (currentSettings.skipInline && blob.size < 10240) {
                 const isImg = rawName.match(/\.(png|jpg|jpeg|gif|webp|heic)$/i) || blob.type.startsWith('image/');
-                if (isImg) {
-                    collectedUrls.add(url);
-                    continue; 
-                }
+                if (isImg) return; 
             }
 
             const finalName = getUniqueFilename(rawName);
-            collectedUrls.add(url);
             
+            // Update stats safely
             scanStats.filesFound++;
             scanStats.sizeBytes += blob.size;
 
@@ -342,9 +342,12 @@ async function processGmailAutomation() {
           } catch (e) {
             console.error('Failed to extract file', e);
           }
-        }
-      }
+      });
 
+      // NEW: Await ALL files in this email at the same time
+      await Promise.all(processPromises);
+
+      // Once ALL attachments for this email are done, move to the next email...
       const nextBtn = getNextButton();
       if (nextBtn) {
         if (nextBtn.getAttribute('aria-disabled') === 'true') {
