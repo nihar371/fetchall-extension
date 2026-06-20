@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FetchAll",
-  "version": "1.1",
+  "version": "1.2",
   "description": "Download all attachments from a Gmail thread or search result into a single .zip file.",
   "permissions": [
     "activeTab",
