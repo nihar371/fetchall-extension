@@ -127,3 +127,136 @@ button {
     background: #ff5252;
     color: #ffffff;
 }
+
+/* --- Hierarchy Styling --- */
+.ext-category {
+    margin-bottom: 8px;
+}
+.parent-label {
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+.child-group {
+    margin-left: 20px;
+    padding-left: 10px;
+    border-left: 2px solid #333;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* --- Custom Input Styling --- */
+.custom-input-wrapper {
+    display: flex;
+    gap: 6px;
+}
+#custom-ext-input {
+    flex-grow: 1;
+    background: #121212;
+    border: 1px solid #333;
+    color: #fff;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+#custom-ext-input:focus {
+    border-color: #666;
+}
+.btn-secondary {
+    width: auto;
+    padding: 6px 12px;
+    background: #333;
+    color: #fff;
+}
+.btn-secondary:hover {
+    background: #444;
+}
+.divider {
+    border: none;
+    border-top: 1px solid #2a2a2a;
+    margin: 12px 0;
+}
+
+/* --- Capsule Tags (Chips) Styling --- */
+.tags-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-height: 24px; /* Prevents layout jump when empty */
+}
+.ext-tag {
+    background: #2a2a2a;
+    border: 1px solid #444;
+    color: #e0e0e0;
+    padding: 3px 8px;
+    border-radius: 999px; /* Capsule shape */
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: background 0.2s;
+}
+.ext-tag:hover {
+    background: #333;
+}
+.tag-remove {
+    cursor: pointer;
+    color: #aaa;
+    font-weight: bold;
+    font-size: 12px;
+    line-height: 1;
+}
+.tag-remove:hover {
+    color: #ff5252;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* Update your existing body block */
+body {
+    width: 480px; /* Increased from 260px for the 3-column layout */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 0;
+    background-color: #121212;
+    color: #e0e0e0;
+}
+
+/* --- Hierarchy Styling --- */
+.categories-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-top: 8px;
+}
+.ext-category {
+    margin-bottom: 0;
+}
+.parent-label {
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+.child-group {
+    margin-left: 8px; /* Tighter indent for the grid layout */
+    padding-left: 8px;
+    border-left: 2px solid #333;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* ... Keep all other CSS from the previous implementation ... */
