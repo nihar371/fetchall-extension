@@ -9,13 +9,71 @@
     <h3>FetchAll</h3>
     
     <div id="settings-panel" class="panel">
-      <div class="setting-group">
+      
+      <div class="setting-group" id="format-selectors">
         <label class="setting-title">File Types to Extract:</label>
-        <label><input type="checkbox" id="filter-pdf" checked> PDFs (.pdf)</label>
-        <label><input type="checkbox" id="filter-img" checked> Images (.jpg, .png...)</label>
-        <label><input type="checkbox" id="filter-doc" checked> Documents (.docx, .csv...)</label>
+        
+        <div class="categories-grid">
+          
+          <div class="ext-category">
+            <label class="parent-label">
+              <input type="checkbox" class="parent-checkbox" data-group="images"> Images
+            </label>
+            <div class="child-group" id="group-images">
+              <label><input type="checkbox" class="child-checkbox" value="png"> .png</label>
+              <label><input type="checkbox" class="child-checkbox" value="jpg"> .jpg / .jpeg</label>
+              <label><input type="checkbox" class="child-checkbox" value="svg"> .svg</label>
+              <label><input type="checkbox" class="child-checkbox" value="gif"> .gif</label>
+              <label><input type="checkbox" class="child-checkbox" value="webp"> .webp</label>
+              <label><input type="checkbox" class="child-checkbox" value="heic"> .heic</label>
+            </div>
+          </div>
+
+          <div class="ext-category">
+            <label class="parent-label">
+              <input type="checkbox" class="parent-checkbox" data-group="documents"> Docs
+            </label>
+            <div class="child-group" id="group-documents">
+              <label><input type="checkbox" class="child-checkbox" value="pdf"> .pdf</label>
+              <label><input type="checkbox" class="child-checkbox" value="docx"> .docx / .doc</label>
+              <label><input type="checkbox" class="child-checkbox" value="xlsx"> .xlsx / .xls</label>
+              <label><input type="checkbox" class="child-checkbox" value="csv"> .csv</label>
+              <label><input type="checkbox" class="child-checkbox" value="txt"> .txt</label>
+              <label><input type="checkbox" class="child-checkbox" value="pptx"> .pptx / .ppt</label>
+            </div>
+          </div>
+
+          <div class="ext-category">
+            <label class="parent-label">
+              <input type="checkbox" class="parent-checkbox" data-group="videos"> Videos
+            </label>
+            <div class="child-group" id="group-videos">
+              <label><input type="checkbox" class="child-checkbox" value="mp4"> .mp4</label>
+              <label><input type="checkbox" class="child-checkbox" value="mov"> .mov</label>
+              <label><input type="checkbox" class="child-checkbox" value="avi"> .avi</label>
+              <label><input type="checkbox" class="child-checkbox" value="webm"> .webm</label>
+            </div>
+          </div>
+          
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <label class="setting-title">Custom Extensions:</label>
+        <div class="custom-input-wrapper">
+          <input type="text" id="custom-ext-input" placeholder="e.g. zip, json, rar">
+          <button id="add-ext-btn" class="btn-secondary">+</button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <label class="setting-title">Targeted Formats:</label>
+        <div id="tags-container" class="tags-container">
+          </div>
       </div>
       
+      <hr class="divider">
+
       <div class="setting-group">
         <label class="setting-title">Smart Filters:</label>
         <label><input type="checkbox" id="skip-inline" checked> Skip Inline Images (&lt; 10KB)</label>
@@ -24,18 +82,9 @@
 
     <div id="progress-panel" class="panel hidden">
       <div class="stats-grid">
-        <div class="stat-box">
-          <span class="stat-value" id="stat-emails">0</span>
-          <span class="stat-label">Emails</span>
-        </div>
-        <div class="stat-box">
-          <span class="stat-value" id="stat-files">0</span>
-          <span class="stat-label">Files</span>
-        </div>
-        <div class="stat-box">
-          <span class="stat-value" id="stat-size">0.00</span>
-          <span class="stat-label">MB</span>
-        </div>
+        <div class="stat-box"><span class="stat-value" id="stat-emails">0</span><span class="stat-label">Emails</span></div>
+        <div class="stat-box"><span class="stat-value" id="stat-files">0</span><span class="stat-label">Files</span></div>
+        <div class="stat-box"><span class="stat-value" id="stat-size">0.00</span><span class="stat-label">MB</span></div>
       </div>
       <progress id="scan-progress" value="0" max="100"></progress>
       <div id="status">Ready to scan...</div>

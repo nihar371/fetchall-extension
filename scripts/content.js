@@ -90,18 +90,24 @@ async function waitForElement(selector, timeout = 10000) {
 function getCleanFilename(link) {
   let attrName = link.getAttribute('download');
   if (attrName && attrName !== 'true' && attrName !== 'attachment') return attrName;
-  const aria = link.getAttribute('aria-label') || link.getAttribute('data-tooltip') || '';
-  let cleanAria = aria.replace(/^(Download|Preview|Open) (attachment )?/i, '').trim();
+  
+  let aria = link.getAttribute('aria-label') || link.getAttribute('data-tooltip') || '';
+  aria = aria.replace(/[\u200B-\u200D\uFEFF\u200E\u200F]/g, '');
+  
+  let cleanAria = aria.replace(/^(Download|Preview|Open)?\s*(attachment)?\s*:?\s*/i, '').trim();
   if (cleanAria && cleanAria.includes('.')) return cleanAria;
 
-  const text = link.textContent || '';
-  const match = text.match(/(.*?\.(?:pdf|png|jpe?g|gif|docx?|xlsx?|pptx?|csv|zip|rar|txt|mp\d|svg|avi|mov))/i);
+  let text = link.textContent || '';
+  text = text.replace(/[\u200B-\u200D\uFEFF\u200E\u200F]/g, '');
+  
+  const match = text.match(/(.*?\.[a-z0-9]{2,5})(?:\s|$)/i);
   if (match) {
     let extracted = match[1].trim();
-    extracted = extracted.replace(/^(Preview|Download) attachment /i, '').trim();
+    extracted = extracted.replace(/^(Preview|Download)?\s*(attachment)?\s*/i, '').trim();
     return extracted;
   }
-  return `attachment_${Date.now()}.file`;
+  
+  return `attachment_${Date.now()}`;
 }
 
 function getUniqueFilename(baseName) {
@@ -143,19 +149,43 @@ function getNextButton() {
 }
 
 function isAllowedExtension(filename) {
-  // If no filters selected, extract nothing
-  if (!currentSettings.pdf && !currentSettings.img && !currentSettings.doc) return false;
+  const allowed = currentSettings.allowedExtensions || [];
+  if (allowed.length === 0) return false;
   
-  const extMatch = filename.match(/\.([a-z0-9]+)$/i);
-  if (!extMatch) return true; // Keep extensionless files if they somehow pass
+  let cleanName = filename.split('?')[0].split('#')[0].trim();
+  cleanName = cleanName.replace(/[\u200B-\u200D\uFEFF\u200E\u200F]/g, '');
+  
+  const extMatch = cleanName.match(/\.([a-z0-9]+)$/i);
+  if (!extMatch) return false; 
   
   const ext = extMatch[1].toLowerCase();
+  return allowed.includes(ext);
+}
+
+// --- MIME-Type Fallback Guesser ---
+function inferExtension(mimeType) {
+  if (!mimeType) return null;
+  const mime = mimeType.toLowerCase();
   
-  if (currentSettings.pdf && ext === 'pdf') return true;
-  if (currentSettings.img && ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) return true;
-  if (currentSettings.doc && ['doc', 'docx', 'xls', 'xlsx', 'csv', 'txt', 'ppt', 'pptx'].includes(ext)) return true;
+  if (mime.includes('pdf')) return 'pdf';
+  if (mime.includes('rfc822') || mime.includes('message/')) return 'eml';
+  if (mime.includes('png')) return 'png';
+  if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
+  if (mime.includes('csv')) return 'csv';
+  if (mime.includes('mp4')) return 'mp4';
+  if (mime.includes('zip')) return 'zip';
+  if (mime.includes('json')) return 'json';
+  if (mime.includes('rar')) return 'rar';
+  if (mime.includes('wordprocessingml') || mime.includes('msword')) return 'docx';
+  if (mime.includes('spreadsheetml') || mime.includes('excel')) return 'xlsx';
+  if (mime.includes('presentationml') || mime.includes('powerpoint')) return 'pptx';
+  if (mime.includes('svg')) return 'svg';
+  if (mime.includes('gif')) return 'gif';
+  if (mime.includes('webp')) return 'webp';
+  if (mime.includes('heic')) return 'heic';
+  if (mime === 'text/plain') return 'txt';
   
-  return false;
+  return null;
 }
 
 async function compileAndDownloadZip() {
@@ -164,6 +194,7 @@ async function compileAndDownloadZip() {
   if (collectedAttachments.length === 0) {
     reportProgress("Finished. No matching files found to zip.", true);
     chrome.storage.local.set({ isScanning: false });
+    isProcessing = false;
     return;
   }
 
@@ -203,9 +234,8 @@ async function processGmailAutomation() {
 
   try {
     const state = await chrome.storage.local.get(["isScanning", "settings"]);
-    currentSettings = state.settings || { pdf: true, img: true, doc: true, skipInline: true };
+    currentSettings = state.settings || { allowedExtensions: ['pdf'], skipInline: true };
 
-    // Handle Graceful Stop
     if (!state.isScanning) {
       reportProgress("Scan stopped by user. Generating ZIP...");
       await compileAndDownloadZip();
@@ -215,7 +245,6 @@ async function processGmailAutomation() {
     if (isListView() && !isEmailView()) {
       reportProgress("Starting from list. Opening first email...");
       const firstRow = await waitForElement('tr.zA');
-      
       if (firstRow) {
         const clickable = firstRow.querySelector('div[role="link"], a[href]') || firstRow;
         clickable.click();
@@ -246,51 +275,64 @@ async function processGmailAutomation() {
 
       const links = Array.from(document.querySelectorAll(attachmentSelectors));
       
-      for (const link of links) {
-        const url = link.href;
-        
-        if (url && !collectedUrls.has(url)) {
+      // NEW: Filter out already collected URLs first to avoid duplicate simultaneous requests
+      const uniqueLinks = links.filter(link => link.href && !collectedUrls.has(link.href));
+
+      // NEW: Create an array of Promises to run in PARALLEL
+      const processPromises = uniqueLinks.map(async (link) => {
+          const url = link.href;
+          collectedUrls.add(url); // Mark as claimed immediately
+
           try {
             let rawName = getCleanFilename(link);
             
-            // Apply Extension Filter (Pre-fetch check)
-            if (!isAllowedExtension(rawName)) {
-                collectedUrls.add(url); // Add to seen list to avoid repeating
-                continue;
-            }
-
-            reportProgress(`Fetching file...`);
+            // STAGE 1 (PRE-CHECK)
+            let cleanBaseName = rawName.split('?')[0].trim();
+            const extMatch = cleanBaseName.match(/\.([a-z0-9]+)$/i);
+            const knownExtensions = ['pdf','png','jpg','jpeg','svg','gif','webp','heic','docx','doc','xlsx','xls','csv','txt','pptx','ppt','mp4','mov','avi','webm','eml','zip','json','rar'];
             
+            if (extMatch) {
+                const ext = extMatch[1].toLowerCase();
+                if (knownExtensions.includes(ext) && !isAllowedExtension(cleanBaseName)) {
+                    return; // Skip
+                }
+            }
+            
+            // STAGE 2 (HEADER FETCH)
             const response = await fetch(url); 
-            if (!response.ok) continue;
+            if (!response.ok) return;
 
             const disposition = response.headers.get('Content-Disposition');
-            if (disposition && disposition.includes('filename=')) {
-              const match = disposition.match(/filename="?([^"]+)"?/);
-              if (match && match[1]) rawName = match[1];
+            const contentType = response.headers.get('Content-Type'); 
+
+            if (disposition) {
+              let match = disposition.match(/filename\*?=['"]?(?:UTF-\d['"]*)?([^;"'\n]+)['"]?/i);
+              if (match && match[1]) {
+                try { rawName = decodeURIComponent(match[1].trim()); } 
+                catch(e) { rawName = match[1].trim(); }
+              }
             }
 
-            // Secondary Extension Check (Post-fetch, in case headers changed the name)
-            if (!isAllowedExtension(rawName)) {
-                collectedUrls.add(url);
-                continue;
+            let cleanNameForCheck = rawName.split('?')[0].trim();
+            if (!/\.[a-z0-9]+$/i.test(cleanNameForCheck)) {
+                const guessedExt = inferExtension(contentType); 
+                if (guessedExt) rawName += '.' + guessedExt;
             }
 
+            // STAGE 3 (POST-CHECK):
+            if (!isAllowedExtension(rawName)) return;
+
+            // STAGE 4 (THE DOWNLOAD):
             const blob = await response.blob();
 
-            // Handle "Skip Inline Images" (< 10KB logic)
             if (currentSettings.skipInline && blob.size < 10240) {
-                // If it's an image under 10KB, skip it
-                const isImg = rawName.match(/\.(png|jpg|jpeg|gif)$/i) || blob.type.startsWith('image/');
-                if (isImg) {
-                    collectedUrls.add(url);
-                    continue; 
-                }
+                const isImg = rawName.match(/\.(png|jpg|jpeg|gif|webp|heic)$/i) || blob.type.startsWith('image/');
+                if (isImg) return; 
             }
 
             const finalName = getUniqueFilename(rawName);
-            collectedUrls.add(url);
             
+            // Update stats safely
             scanStats.filesFound++;
             scanStats.sizeBytes += blob.size;
 
@@ -300,9 +342,12 @@ async function processGmailAutomation() {
           } catch (e) {
             console.error('Failed to extract file', e);
           }
-        }
-      }
+      });
 
+      // NEW: Await ALL files in this email at the same time
+      await Promise.all(processPromises);
+
+      // Once ALL attachments for this email are done, move to the next email...
       const nextBtn = getNextButton();
       if (nextBtn) {
         if (nextBtn.getAttribute('aria-disabled') === 'true') {
@@ -343,17 +388,19 @@ async function processGmailAutomation() {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "triggerScanStart") {
     
-    // Reset Data
+    isProcessing = false; 
     collectedUrls.clear();
     fileNameTracker.clear();
     scanStats = { emailsScanned: 0, filesFound: 0, sizeBytes: 0 };
-    clearAttachmentsDB();
     
-    chrome.storage.local.set({ isScanning: true }, () => {
-      reportProgress("Gmail automation starting...");
-      processGmailAutomation();
+    clearAttachmentsDB().then(() => {
+        chrome.storage.local.set({ isScanning: true }, () => {
+          reportProgress("Gmail automation starting...");
+          processGmailAutomation();
+        });
     });
+    
     sendResponse({ status: "triggered" });
-    return true;
+    return true; 
   }
 });
